@@ -41,7 +41,7 @@ const results = (...vulns) => ({
   results: [{ packages: [{ package: { name: 'dep', version: '0.1.0' }, vulnerabilities: vulns }] }],
 });
 
-function run(name, { res, waiver, expect }) {
+function run(name, { res, waiver, expect, stdoutIncludes }) {
   const rf = join(DIR, `res-${n}.json`);
   writeFileSync(rf, JSON.stringify(res));
   const args = [GATE, rf];
@@ -55,9 +55,11 @@ function run(name, { res, waiver, expect }) {
     env: { ...process.env, OSV_GATE_TODAY: TODAY, OSV_GATE_KEV_FILE: kevFile, OSV_GATE_EPSS_FILE: epssFile },
     encoding: 'utf8',
   });
-  const ok = out.status === expect;
+  const stdoutOk = !stdoutIncludes || (out.stdout || '').includes(stdoutIncludes);
+  const ok = out.status === expect && stdoutOk;
   console.log(`${ok ? 'PASS' : 'FAIL'}  [${out.status} want ${expect}]  ${name}`);
   if (!ok) {
+    if (!stdoutOk) console.log(`  --- expected stdout to include: ${stdoutIncludes}`);
     console.log('  --- stdout ---\n' + out.stdout);
     console.log('  --- stderr ---\n' + out.stderr);
   }
@@ -65,7 +67,7 @@ function run(name, { res, waiver, expect }) {
 }
 
 const W = (extra) =>
-  `policy_version="2.0"\n[[waiver]]\nid="GHSA-nofix"\nreason="no upstream fix"\nsigned_by="Security Lead"\n${extra}\n`;
+  `policy_version="2.0"\n[[waiver]]\nid="GHSA-nofix"\nreason="no upstream fix"\nsigned_by="Security Lead"\ntracking_issue="FUL-99"\n${extra}\n`;
 
 const cases = [
   // CVSS gate
@@ -85,9 +87,18 @@ const cases = [
   ['7.5 no-fix, runtime_capable + escalation_ack -> pass', { res: results(vuln('GHSA-nofix', { vector: C75 })), waiver: W('expires="2026-07-10"\nruntime_capable="true"\nescalation_ack="Security Lead 2026-06-22"'), expect: 0 }],
   // Exploitation gate (condition B) — regardless of CVSS, not waiver-eligible
   ['KEV-listed low CVSS -> fail (KEV)', { res: results(vuln('GHSA-kev', { vector: C54, aliases: ['CVE-2099-0001'] })), expect: 1 }],
-  ['KEV-listed even WITH a waiver -> fail (not waivable)', { res: results(vuln('GHSA-kev', { vector: C54, aliases: ['CVE-2099-0001'] })), waiver: `[[waiver]]\nid="GHSA-kev"\nreason="x"\nsigned_by="Security Lead"\nexpires="2026-07-02"\n`, expect: 1 }],
+  ['KEV-listed even WITH a waiver -> fail (not waivable)', { res: results(vuln('GHSA-kev', { vector: C54, aliases: ['CVE-2099-0001'] })), waiver: `[[waiver]]\nid="GHSA-kev"\nreason="x"\nsigned_by="Security Lead"\ntracking_issue="FUL-99"\nexpires="2026-07-02"\n`, expect: 1 }],
   ['EPSS 0.91 low CVSS -> fail (EPSS>=0.5)', { res: results(vuln('GHSA-epss', { vector: C54, aliases: ['CVE-2099-0002'] })), expect: 1 }],
   ['EPSS 0.10 sub-threshold CVSS -> pass', { res: results(vuln('GHSA-ok', { vector: C54, aliases: ['CVE-2099-0003'] })), expect: 0 }],
+  // FUL-42 waiver-file hygiene (compensating control for count=0) — enforced on
+  // EVERY entry independent of whether its vuln is in the scan. Use empty results
+  // to prove the file itself gates, not a matched finding.
+  ['7.5 no-fix, waiver missing tracking_issue -> fail', { res: results(vuln('GHSA-nofix', { vector: C75 })), waiver: `[[waiver]]\nid="GHSA-nofix"\nreason="x"\nsigned_by="Security Lead"\nexpires="2026-07-10"\n`, expect: 1 }],
+  ['waiver bad tracking_issue format -> fail', { res: results(vuln('GHSA-nofix', { vector: C75 })), waiver: W('expires="2026-07-10"\ntracking_issue="not-an-id"'), expect: 1 }],
+  ['empty scan + malformed waiver (no expiry) -> fail (file gates)', { res: { results: [] }, waiver: `[[waiver]]\nid="GHSA-orphan"\nreason="x"\nsigned_by="Security Lead"\ntracking_issue="FUL-1"\n`, expect: 1 }],
+  ['empty scan + expired waiver -> fail (no stale suppression)', { res: { results: [] }, waiver: `[[waiver]]\nid="GHSA-orphan"\nreason="x"\nsigned_by="Security Lead"\ntracking_issue="FUL-1"\nexpires="2026-06-01"\n`, expect: 1 }],
+  ['empty scan + over-90d waiver -> fail (bounded window)', { res: { results: [] }, waiver: `[[waiver]]\nid="GHSA-orphan"\nreason="x"\nsigned_by="Security Lead"\ntracking_issue="FUL-1"\nexpires="2026-12-01"\n`, expect: 1 }],
+  ['empty scan + well-formed in-window waiver -> pass (register visible)', { res: { results: [] }, waiver: `[[waiver]]\nid="GHSA-orphan"\nreason="x"\nsigned_by="Security Lead"\ntracking_issue="FUL-1"\nexpires="2026-08-01"\n`, expect: 0, stdoutIncludes: 'WAIVER REGISTER' }],
 ];
 
 let pass = 0;
