@@ -37,3 +37,5 @@ lockfile.
 `baileys-sidecar-ci / baileys-sidecar-gate` (`strict`), `enforce_admins: true`,
 and `require_code_owner_reviews: true` (the waiver register is CODEOWNERS-gated).
 Changes reach `main` via PR; a failing gate blocks merge.
+
+<!-- FUL-37 reviewer smoke test: confirms ffr-merge-reviewer auto-approves a routine PR on a green gate. Safe to revert. -->
