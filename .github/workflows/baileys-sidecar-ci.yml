@@ -72,3 +72,4 @@ jobs:
         uses: ./.github/actions/osv-gate
         with:
           working-directory: router/baileys-sidecar
+# probe(FUL-36): diagnostic only — verifies whether code-owner review is enforced at count=0; PR will be closed unmerged.
