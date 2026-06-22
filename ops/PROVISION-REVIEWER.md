@@ -25,10 +25,10 @@ permissions, private key stored as a repo secret.
   Until the two secrets below exist, the approve job is simply skipped (inert).
 - `ops/reviewer-app-manifest.json` — minimal-scope App manifest.
 
-> Note: this PR deliberately does **not** touch `ops/branch-protection.json`. The live
-> file is reconciled to the [FUL-36] posture (`count: 0`, context `baileys-sidecar-gate`).
-> Flipping to `count: 1` is the **last** step (step 5), done only after the App's approval
-> is proven on a real PR — never before, or the FUL-34 deadlock returns.
+> Note: `ops/branch-protection.json` stays at the [FUL-36] live posture (`count: 0`,
+> context `baileys-sidecar-gate`). Flipping to `count: 1` is the **last** step (step 5),
+> done only after the App's approval is proven to **count** on a real PR (see the
+> `Contents: Write` warning in Step 1) — never before, or the FUL-34 deadlock returns.
 
 ## Step 1 — Create the GitHub App (one-time, account-owner action)
 
@@ -55,11 +55,22 @@ simplest is a tiny local form:
 ```
 
 Click **Create GitHub App**, confirm, done — GitHub creates the App with exactly the
-manifest's permissions (`pull_requests: write`, `contents: read`, `metadata: read`,
+manifest's permissions (`pull_requests: write`, `contents: write`, `metadata: read`,
 `checks: read`), no webhook.
 
 **B. Manual.** Settings → Developer settings → GitHub Apps → New GitHub App. Set the
 same four permissions, no webhook, "Only on this account".
+
+> ⚠️ **`Contents: Write` is mandatory, not cosmetic.** A GitHub App's approving review
+> only counts toward `required_approving_review_count` if the App has repository **write**
+> access, and an App's write role requires `contents: write`. FUL-37 proved this the hard
+> way: with `contents: read` the bot's approval came back `author_association: NONE` and
+> did **not** count, so `count: 1` deadlocked exactly like FUL-34. If you created the App
+> earlier with `contents: read`, **edit the App → Permissions → Repository → Contents →
+> Access: Read and write**, save, then **accept the new permission on the installation**
+> (the install will show a "review request" banner / email — approve it). The bot still
+> cannot push to `main`: `enforce_admins: true` + branch protection apply to it and it is
+> in no bypass list; the workflow uses the token only to submit reviews.
 
 ## Step 2 — Generate a private key
 
@@ -87,10 +98,18 @@ gh secret set REVIEWER_APP_PRIVATE_KEY --repo "$REPO" < path/to/ffr-merge-review
 1. **Land** this PR (the reviewer workflow + manifest + runbook). At the live `count: 0`
    posture `require_code_owner_reviews` is inert, so a green `baileys-sidecar-gate` is
    sufficient to merge (the gate reports on every PR since FUL-39).
-2. **Prove the loop FIRST** (before flipping count): open a trivial routine PR
-   (e.g. a README touch) authored by `darshjme`. Expect: gate runs green →
-   `merge-reviewer` posts an approving review as `ffr-merge-reviewer[bot]`. Confirm the
-   bot review actually appears before changing branch protection.
+2. **Prove the approval COUNTS first** (before flipping count): open a trivial routine PR
+   (e.g. a README touch) authored by `darshjme`. The gate goes green → `merge-reviewer`
+   posts an approving review as `ffr-merge-reviewer[bot]`. A review *appearing* is not
+   enough — confirm it is a **counting** approval:
+   ```bash
+   gh pr view <PR> --repo darshjme/fullstackforge-baileys-sidecar \
+     --json reviewDecision,reviews \
+     --jq '{decision:.reviewDecision, bot:[.reviews[]|select(.author.login=="ffr-merge-reviewer")|.state]}'
+   # MUST show decision "APPROVED" (not "REVIEW_REQUIRED"). If it stays REVIEW_REQUIRED
+   # with the bot's APPROVED review present, the App lacks repo write access — STOP and
+   # fix Contents:write (Step 1 warning) before touching branch protection.
+   ```
 3. **Edit `count` 0→1 and apply** — only after step 2 is proven:
    ```bash
    export MSYS_NO_PATHCONV=1

@@ -1,5 +1,5 @@
 {
-  "_comment": "Branch-protection payload for the FUL repo default branch. Origin: FUL-23 task 1; merge-policy resolved in FUL-34; interim count=0 ratified in FUL-35; IaC reconciled to live in FUL-36; count RESTORED to 1 in FUL-37 now that a second approving identity exists. Apply with ops/apply-branch-protection.sh (token needs repo-admin). NOTES: (1) required_status_checks.contexts must be the CHECK-RUN/job name 'baileys-sidecar-gate' alone, NOT 'baileys-sidecar-ci / baileys-sidecar-gate' (the 'workflow / job' form is unsatisfiable and made main permanently unmergeable). (2) required_approving_review_count is 1: the dedicated 'ffr-merge-reviewer' GitHub App (see ops/PROVISION-REVIEWER.md) is a second principal distinct from the PR author darshjme, so a non-self approval is always available \u2014 this does NOT re-create the FUL-34 deadlock. The App auto-approves only ROUTINE PRs on a green baileys-sidecar-gate; it never approves PRs touching CODEOWNERS-protected paths. (3) With count>=1, require_code_owner_reviews is now ENFORCED: changes to CODEOWNERS-owned paths require a human Security (code-owner) review \u2014 the bot cannot satisfy it because it is not a CODEOWNER. Rollback to count=0 (FUL-35 posture) only if the App is ever uninstalled, to avoid an unmergeable main.",
+  "_comment": "Branch-protection payload for the FUL repo default branch. Origin: FUL-23 task 1; merge-policy resolved in FUL-34; interim count=0 ratified in FUL-35; IaC reconciled to live in FUL-36. Apply with ops/apply-branch-protection.sh (token needs repo-admin). NOTES: (1) required_status_checks.contexts must be the CHECK-RUN/job name 'baileys-sidecar-gate' alone, NOT 'baileys-sidecar-ci / baileys-sidecar-gate' (the 'workflow / job' form is unsatisfiable and made main permanently unmergeable). (2) required_approving_review_count is 0 (the FUL-35 interim posture) and MUST stay 0 until the FUL-37 reviewer App can cast a COUNTING approval. The 'ffr-merge-reviewer' App is built and wired, but FUL-37 verification proved its approval does NOT count while it has only contents:read (GitHub counts approvals only from principals with repository WRITE access; the App needs contents:write). Flipping to 1 before that is fixed re-creates the FUL-34 deadlock (proven: routine PR showed REVIEW_REQUIRED/BLOCKED with the bot's approval present). Raise to 1 ONLY after ops/PROVISION-REVIEWER.md step 5 confirms a bot approval flips reviewDecision to APPROVED. (3) At count=0, require_code_owner_reviews is INERT — the required status check 'baileys-sidecar-gate' is the only enforced merge control until count>=1.",
   "required_status_checks": {
     "strict": true,
     "contexts": [
@@ -8,7 +8,7 @@
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
+    "required_approving_review_count": 0,
     "dismiss_stale_reviews": true,
     "require_code_owner_reviews": true
   },
