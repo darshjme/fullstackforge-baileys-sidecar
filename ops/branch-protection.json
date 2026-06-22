@@ -1,14 +1,14 @@
 {
-  "_comment": "Branch-protection payload for the FUL repo default branch (FUL-23 task 1). Apply with ops/apply-branch-protection.sh. Requires a token with repo-admin on the FUL repo. The required_status_checks.contexts strings must match the workflow job names exactly.",
+  "_comment": "Branch-protection payload for the FUL repo default branch. Origin: FUL-23 task 1; merge-policy resolved in FUL-34. Apply with ops/apply-branch-protection.sh (token needs repo-admin). NOTES: (1) required_status_checks.contexts must be the CHECK-RUN/job name 'baileys-sidecar-gate' alone, NOT 'baileys-sidecar-ci / baileys-sidecar-gate' (the 'workflow / job' form is unsatisfiable and made main permanently unmergeable). (2) required_approving_review_count is 0 because this is a single-GitHub-identity company (darshjme), who authors PRs and cannot self-approve; with 1 required review no agent could ever merge. The supply-chain control is preserved by the required status check (baileys-sidecar-gate) + require_code_owner_reviews on sensitive paths (CODEOWNERS). Raise count back to 1 once a second reviewer identity / Security team exists.",
   "required_status_checks": {
     "strict": true,
     "contexts": [
-      "baileys-sidecar-ci / baileys-sidecar-gate"
+      "baileys-sidecar-gate"
     ]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
+    "required_approving_review_count": 0,
     "dismiss_stale_reviews": true,
     "require_code_owner_reviews": true
   },
