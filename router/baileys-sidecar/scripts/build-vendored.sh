@@ -18,8 +18,18 @@ PAYLOAD="baileys-sidecar-${VERSION}"
 cd "$(dirname "$0")/.."   # -> router/baileys-sidecar
 
 if [[ ! -d node_modules ]]; then
-  echo "build-vendored: node_modules missing — run 'npm ci --omit=dev --ignore-scripts' first" >&2
-  exit 1
+  # `npm ci` does not create node_modules when the locked production tree has
+  # zero dependencies (e.g. the bootstrap package that only carries the gate).
+  # Distinguish "genuinely zero deps" (ok — vendor an empty tree) from "install
+  # never ran" by inspecting the lockfile.
+  dep_count="$(node -e "const l=require('./package-lock.json');const p=l.packages||{};console.log(Object.keys(p).filter(k=>k&&k.startsWith('node_modules/')).length)" 2>/dev/null || echo unknown)"
+  if [[ "$dep_count" == "0" ]]; then
+    echo "build-vendored: lockfile has zero production deps — vendoring an empty node_modules"
+    mkdir -p node_modules
+  else
+    echo "build-vendored: node_modules missing (lockfile deps=$dep_count) — run 'npm ci --omit=dev --ignore-scripts' first" >&2
+    exit 1
+  fi
 fi
 
 # Hard fail if a dev-only dep leaked into the production tree.
