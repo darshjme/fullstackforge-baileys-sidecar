@@ -16,11 +16,24 @@
 //     * These are NOT waiver-eligible here — escalate to Security for sign-off.
 //   Waiver rules (FUL-24 condition C):
 //     * Only NO-FIX vulns can be waived; a fix existing always wins.
-//     * Required fields: id, signed_by (approver), reason (justification), expires.
+//     * Required fields: id, signed_by (approver), reason (justification),
+//       tracking_issue (linked issue id, FUL-42), expires.
 //     * Max remaining TTL: 14 days for Critical (CVSS >= 9.0), 30 days for High.
 //     * runtime_capable = true (network/fs-capable runtime dep) requires an
 //       explicit escalation_ack from Security.
 //     * Expired / unsigned / over-TTL / missing-field => invalid => gate fails.
+//   Waiver-file hygiene (FUL-42 — compensating control for the count=0 review
+//   posture ratified in FUL-41; coordinates with FUL-39 "report on every path"):
+//     * EVERY [[waiver]] entry is structurally validated up front, independent
+//       of whether its vuln appears in this scan, and the gate FAILS CLOSED on
+//       any malformed entry. A single author can still write a well-formed
+//       waiver, but it cannot be silent, undated, untracked, stale, or open-ended.
+//     * Required on every entry: id, signed_by, reason, tracking_issue (matching
+//       an issue id like FUL-42), and an expires date that is valid, in the
+//       future (no stale/indefinite suppression), and within a bounded window
+//       (<= 90 days; the per-severity 30d/14d caps above are tighter still).
+//     * The full waiver register is printed every run and written to the PR
+//       step summary so added/changed suppressions are never buried.
 //
 // Exit codes: 0 = pass, 1 = policy violation, 2 = usage/parse error.
 //
@@ -29,13 +42,15 @@
 // EPSS) is fetched over HTTPS with Node's built-in fetch, or injected from local
 // files for offline/deterministic runs (OSV_GATE_KEV_FILE / OSV_GATE_EPSS_FILE).
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync } from 'node:fs';
 
 const THRESHOLD = 7.0; // High
 const CRITICAL = 9.0; // Critical
 const EPSS_THRESHOLD = 0.5; // FUL-24 condition B
 const MAX_TTL_DAYS_HIGH = 30; // FUL-24 condition C
 const MAX_TTL_DAYS_CRITICAL = 14;
+const MAX_TTL_DAYS_ABSOLUTE = 90; // FUL-42 outer bound for ANY waiver (severity caps above are tighter)
+const TRACKING_ISSUE_RE = /^[A-Z][A-Z0-9]*-\d+$/; // FUL-42 linked tracking issue id, e.g. FUL-42
 
 const KEV_URL =
   process.env.OSV_GATE_KEV_URL ||
@@ -214,10 +229,34 @@ const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400
 const waiverById = new Map();
 for (const w of waiverDoc.waivers) if (w.id) waiverById.set(w.id.toUpperCase(), w);
 
+/* ---------- FUL-42: surface the register, then fail closed on hygiene ----- */
+// Runs before enrichment so a malformed/stale/over-window waiver fails the gate
+// even on an empty scan, offline, or when its vuln is no longer present.
+const register = waiverRegister();
+register.lines.forEach((l) => console.log(l));
+writeStepSummary(register.md);
+
+const hygiene = [];
+for (const w of waiverDoc.waivers) {
+  const problems = lintWaiverEntry(w);
+  if (problems.length) hygiene.push({ id: w.id ?? '(no id)', problems });
+}
+if (hygiene.length) {
+  console.error(`\nosv-gate: FAIL — ${hygiene.length} malformed/stale OSV waiver(s) in ${waiversPath}:`);
+  hygiene.forEach((h) => console.error(`  - ${h.id}: ${h.problems.join('; ')}`));
+  writeStepSummary(
+    `### ❌ osv-gate: ${hygiene.length} invalid OSV waiver(s)\n\n` +
+      hygiene.map((h) => `- \`${h.id}\`: ${h.problems.join('; ')}`).join('\n') +
+      '\n'
+  );
+  process.exit(1);
+}
+
 function validateWaiver(w, score) {
   if (!w) return { ok: false, reason: 'no fix available, no valid Security waiver' };
   if (!w.signed_by) return { ok: false, reason: 'waiver missing signed_by (approver)' };
   if (!w.reason) return { ok: false, reason: 'waiver missing reason (justification)' };
+  if (!w.tracking_issue) return { ok: false, reason: 'waiver missing tracking_issue (linked issue id)' };
   if (!w.expires) return { ok: false, reason: 'waiver missing expires (TTL)' };
   if (w.expires < today) return { ok: false, reason: `waiver expired ${w.expires}` };
   const remaining = daysBetween(today, w.expires);
@@ -227,6 +266,77 @@ function validateWaiver(w, score) {
   if (String(w.runtime_capable).toLowerCase() === 'true' && !w.escalation_ack)
     return { ok: false, reason: 'runtime_capable waiver requires escalation_ack from Security' };
   return { ok: true };
+}
+
+/* ------------------ FUL-42 waiver-file hygiene + register ----------------- */
+// Structural guardrails enforced on EVERY waiver entry, independent of whether
+// the suppressed vuln currently appears in the scan. Compensating control for
+// the count=0 review posture (FUL-41/FUL-42): a single author can still write a
+// waiver, but it cannot be silent, malformed, undated, untracked, stale, or
+// open-ended. Returns the list of problems for one entry ([] = clean).
+function lintWaiverEntry(w) {
+  const problems = [];
+  if (!w.id) problems.push('missing id');
+  if (!w.signed_by) problems.push('missing signed_by (approver)');
+  if (!w.reason) problems.push('missing reason (justification)');
+  if (!w.tracking_issue) problems.push('missing tracking_issue (linked issue id, e.g. FUL-42)');
+  else if (!TRACKING_ISSUE_RE.test(w.tracking_issue))
+    problems.push(`tracking_issue "${w.tracking_issue}" is not a valid issue id (e.g. FUL-42)`);
+  if (!w.expires) {
+    problems.push('missing expires (TTL)');
+  } else if (!/^\d{4}-\d{2}-\d{2}$/.test(w.expires) || Number.isNaN(Date.parse(w.expires))) {
+    problems.push(`expires "${w.expires}" is not a valid YYYY-MM-DD date`);
+  } else if (w.expires < today) {
+    problems.push(`expired ${w.expires} — stale suppression (no silent/indefinite waivers)`);
+  } else if (daysBetween(today, w.expires) > MAX_TTL_DAYS_ABSOLUTE) {
+    problems.push(
+      `expires ${w.expires} is ${daysBetween(today, w.expires)}d out, exceeds the ${MAX_TTL_DAYS_ABSOLUTE}d window`
+    );
+  }
+  if (String(w.runtime_capable).toLowerCase() === 'true' && !w.escalation_ack)
+    problems.push('runtime_capable=true requires escalation_ack from Security');
+  return problems;
+}
+
+// Human-readable + markdown view of the active suppression set, so added or
+// changed waivers are surfaced prominently and never buried in the diff.
+function waiverRegister() {
+  const ws = waiverDoc.waivers;
+  if (!ws.length) {
+    return {
+      lines: ['osv-gate: WAIVER REGISTER — no active OSV waivers.'],
+      md: '### OSV waiver register\n\n_No active OSV waivers._\n',
+    };
+  }
+  const lines = [`osv-gate: WAIVER REGISTER — ${ws.length} active waiver(s) suppressing findings:`];
+  const md = [
+    `### OSV waiver register — ${ws.length} active waiver(s)`,
+    '',
+    '| id | package | expires | tracking | signed_by | runtime |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const w of ws) {
+    const id = w.id ?? '(no id)';
+    const pkg = w.package ?? '?';
+    const exp = w.expires ?? '?';
+    const trk = w.tracking_issue ?? '?';
+    const by = w.signed_by ?? '?';
+    const rt = String(w.runtime_capable ?? 'false');
+    lines.push(`  - ${id}  pkg=${pkg}  expires=${exp}  tracking=${trk}  signed_by=${by}  runtime_capable=${rt}`);
+    md.push(`| ${id} | ${pkg} | ${exp} | ${trk} | ${by} | ${rt} |`);
+  }
+  return { lines, md: md.join('\n') + '\n' };
+}
+
+// Best-effort append to the GitHub Actions PR/job step summary (no-op locally).
+function writeStepSummary(md) {
+  const f = process.env.GITHUB_STEP_SUMMARY;
+  if (!f) return;
+  try {
+    appendFileSync(f, md + '\n');
+  } catch {
+    /* step summary is best-effort; never let it break the gate */
+  }
 }
 
 /* ------------------------------ enrichment ------------------------------- */

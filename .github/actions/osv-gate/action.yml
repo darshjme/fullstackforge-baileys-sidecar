@@ -4,8 +4,13 @@ description: >
   FUL-20 / FUL-24 threshold policy: fail on any vulnerability with CVSS >= 7.0
   that has a fix available; no-fix highs are allowed only with a valid,
   non-expired, Security-signed waiver (<=30d High / <=14d Critical) in
-  security/osv-waivers.toml. Additionally fails — regardless of CVSS, not
-  waiver-eligible — on any vuln in the CISA KEV catalog or with EPSS >= 0.5.
+  security/osv-waivers.toml. Every waiver entry is additionally hygiene-checked
+  (FUL-42, fail-closed): required fields incl. a linked tracking_issue, a valid
+  future expiry within a 90-day window, and no stale suppression — enforced on
+  every entry regardless of whether its vuln is in the current scan, with the
+  full waiver register surfaced in the run log and PR summary. Additionally
+  fails — regardless of CVSS, not waiver-eligible — on any vuln in the CISA KEV
+  catalog or with EPSS >= 0.5.
   KEV/EPSS are fetched over HTTPS at runtime; the gate is fail-closed if that
   enrichment is unreachable (set OSV_GATE_SKIP_ENRICHMENT=1 only for offline
   dev runs — it disables condition B).
@@ -44,8 +49,33 @@ runs:
         echo "OSV-Scanner raw results:"
         cat osv-results.json | head -c 2000 || true
 
+    # FUL-42: surface any change to the waiver register into the PR summary so a
+    # suppression added in this PR is never buried. Best-effort and isolated:
+    # `|| true` guarantees this presentation step can never gate the build — the
+    # authoritative hygiene enforcement lives in osv-gate.mjs below (and it also
+    # writes the full register to the step summary every run, PR or not).
+    - name: Surface OSV waiver changes (PR summary)
+      if: github.event_name == 'pull_request'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        base="${{ github.event.pull_request.base.sha }}"
+        git fetch --no-tags --depth=1 origin "$base" >/dev/null 2>&1 || true
+        if git diff --quiet "$base" -- security/osv-waivers.toml 2>/dev/null; then
+          echo "### OSV waivers: no changes in this PR" >> "$GITHUB_STEP_SUMMARY"
+        else
+          {
+            echo "### ⚠️ OSV waiver file changed in this PR — review the suppression(s) below"
+            echo '```diff'
+            git diff "$base" -- security/osv-waivers.toml 2>/dev/null || echo "(unable to compute diff)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        true
+
     # Apply the documented threshold policy + waiver file + KEV/EPSS exploitation
-    # gate. Exits non-zero on a policy violation OR if KEV/EPSS enrichment is
+    # gate. Exits non-zero on a policy violation, on any malformed/stale/over-window
+    # waiver (FUL-42 hygiene, fail-closed), OR if KEV/EPSS enrichment is
     # unreachable (fail-closed), which fails the job (and therefore the gate).
     - name: Enforce CVSS / KEV / EPSS policy (+ waivers)
       shell: bash
