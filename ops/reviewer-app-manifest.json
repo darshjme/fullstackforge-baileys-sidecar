@@ -1,5 +1,5 @@
 {
-  "_comment": "GitHub App manifest for the dedicated merge reviewer (FUL-37). Used with the App-manifest creation flow (see ops/PROVISION-REVIEWER.md). Permissions are the MINIMUM required to submit pull-request reviews and evaluate policy. No webhook, no write beyond pull_requests, single-repo install.",
+  "_comment": "GitHub App manifest for the dedicated merge reviewer (FUL-37). Used with the App-manifest creation flow (see ops/PROVISION-REVIEWER.md). contents:write is REQUIRED (not optional): a GitHub App's approving review only counts toward required_approving_review_count if the App has repository WRITE access, and an App's write role requires contents:write (pull_requests:write needs contents:write under the hood). Verified the hard way on FUL-37: an App with contents:read produced a review with author_association:NONE that did NOT count, deadlocking count=1. The App still cannot push to main — enforce_admins:true + branch protection apply to it and it is in no bypass list; the workflow uses the token only to submit reviews. No webhook, single-repo install.",
   "name": "ffr-merge-reviewer",
   "url": "https://github.com/darshjme/fullstackforge-baileys-sidecar",
   "description": "Second-party automated PR reviewer for fullstackforge-baileys-sidecar. Approves routine PRs on a green baileys-sidecar-gate so required_approving_review_count=1 can be enforced without a self-approval deadlock (FUL-37).",
@@ -10,7 +10,7 @@
   "default_events": [],
   "default_permissions": {
     "pull_requests": "write",
-    "contents": "read",
+    "contents": "write",
     "metadata": "read",
     "checks": "read"
   }
