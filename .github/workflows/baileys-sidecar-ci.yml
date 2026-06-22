@@ -1,21 +1,28 @@
 name: baileys-sidecar-ci
 
-# PR gate for the Baileys sidecar (FUL-20 / FUL-23).
-# Scoped to router/baileys-sidecar/** so unrelated PRs don't pay the cost,
-# but the job name "baileys-sidecar-gate" is what branch protection requires
-# as a status check (see ops/branch-protection.json).
+# PR gate for the Baileys sidecar (FUL-20 / FUL-23 / FUL-39).
 #
-# Supply-chain controls enforced here on every PR:
-#   1. Lockfile integrity   -> `npm ci` (fails on package-lock.json drift)
+# WHY there is NO top-level `paths:` filter (FUL-39 fix):
+#   `baileys-sidecar-gate` is a REQUIRED status check (branch protection,
+#   strict: true). A path-filtered workflow simply never starts on PRs that
+#   miss the filter, so the required check never reports and the PR is wedged
+#   forever at "Expected — Waiting for status" ("base branch policy prohibits
+#   the merge"). A *skipped* required job reports the same way, so we cannot
+#   use a job-level `if:` to skip the gate either. The gate job must therefore
+#   ALWAYS run and ALWAYS post a conclusion. We run on every PR and
+#   short-circuit the expensive SCA/OSV work to success when no sidecar files
+#   changed — so non-router PRs (ops IaC, CODEOWNERS, docs) get a green gate
+#   without paying for the full supply-chain suite.
+#
+# Supply-chain controls enforced when sidecar/gate files DO change:
+#   1. Lockfile integrity   -> `npm ci --ignore-scripts` (fails on lockfile drift)
 #   2. Known-vuln gate (SCA) -> `npm audit --audit-level=high` (fail high/critical)
-#   3. OSV-Scanner gate      -> CVSS >= 7.0 with-fix fails; no-fix -> tracked waiver
+#   3. OSV-Scanner gate      -> CVSS/KEV/EPSS policy via ./.github/actions/osv-gate
 
 on:
   pull_request:
-    paths:
-      - 'router/baileys-sidecar/**'
-      - '.github/workflows/baileys-sidecar-ci.yml'
-  # Allow manual re-runs without a code change (e.g. after a waiver edit).
+  # Allow manual re-runs without a code change (e.g. after a waiver edit) —
+  # a workflow_dispatch run always executes the full gate.
   workflow_dispatch:
 
 # A failing PR that is later fixed should cancel the stale in-flight run.
@@ -25,15 +32,13 @@ concurrency:
 
 permissions:
   contents: read
-
-defaults:
-  run:
-    working-directory: router/baileys-sidecar
+  pull-requests: read   # read the PR's changed-file list for the path short-circuit
 
 jobs:
-  # IMPORTANT: this job's name (rendered as "baileys-sidecar-ci / baileys-sidecar-gate")
-  # is the exact string registered as a required status check in branch protection.
-  # Do not rename without updating ops/branch-protection.json.
+  # IMPORTANT: this job's name is the exact string registered as a required
+  # status check in branch protection (context: "baileys-sidecar-gate").
+  # Do not rename without updating ops/branch-protection.json AND the live
+  # branch-protection required_status_checks contexts.
   baileys-sidecar-gate:
     name: baileys-sidecar-gate
     runs-on: ubuntu-latest
@@ -42,7 +47,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Decide whether this PR touches sidecar / gate files. We compute this
+      # ourselves from the PR's file list (no third-party action) precisely
+      # because this job IS the supply-chain gate. A workflow_dispatch run has
+      # no PR context, so it always runs the full gate.
+      - name: Detect relevant changes
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "event '${{ github.event_name }}' -> running full gate"
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --jq '.[].filename')"
+          echo "Changed files in this PR:"
+          echo "$files"
+          if printf '%s\n' "$files" | grep -qE '^(router/baileys-sidecar/|\.github/workflows/baileys-sidecar-.*\.yml$|\.github/actions/osv-gate/)'; then
+            echo "Sidecar/gate files changed -> full supply-chain gate."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No sidecar/gate files changed -> gate short-circuits to PASS."
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No sidecar changes — gate passes
+        if: steps.changes.outputs.relevant != 'true'
+        run: |
+          echo "PASS - this PR changes no router/baileys-sidecar files; the supply-chain gate is not applicable."
+
       - name: Setup Node
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -53,22 +92,31 @@ jobs:
       # of sync. This is the lockfile-drift gate. --ignore-scripts blocks install
       # scripts from running arbitrary code in CI (defense-in-depth for supply chain).
       - name: Install (locked, no install scripts)
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: router/baileys-sidecar
         run: npm ci --ignore-scripts
 
       - name: Lint
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: router/baileys-sidecar
         run: npm run lint --if-present
 
       - name: Test
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: router/baileys-sidecar
         run: npm test --if-present
 
       # SCA gate #1 — npm advisory database. Fail on high/critical.
       - name: npm audit (fail on high/critical)
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: router/baileys-sidecar
         run: npm audit --audit-level=high
 
       # SCA gate #2 — OSV-Scanner against the committed lockfile.
-      # Reusable composite action runs the scanner and the CVSS>=7-with-fix gate,
+      # Reusable composite action runs the scanner and the CVSS/KEV/EPSS gate,
       # honoring the Security-signed waiver file.
       - name: OSV-Scanner release-policy gate
+        if: steps.changes.outputs.relevant == 'true'
         uses: ./.github/actions/osv-gate
         with:
           working-directory: router/baileys-sidecar
