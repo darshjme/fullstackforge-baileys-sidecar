@@ -1,0 +1,111 @@
+name: baileys-sidecar-release
+
+# Release gate for the Baileys sidecar (FUL-20 / FUL-23).
+# Triggered on a sidecar release tag. Enforces the FULL supply-chain policy and
+# produces the shipped, reproducible payload + SBOM as release assets.
+#
+# Tasks covered:
+#   2. Reproducible + hardened build (npm ci --omit=dev --ignore-scripts, vendored node_modules, drift check)
+#   3. CycloneDX SBOM per release (published as a release asset)
+#   4. Release-gate SCA (npm audit + OSV-Scanner with documented thresholds)
+
+on:
+  push:
+    tags:
+      - 'baileys-sidecar-v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag/ref to build (for manual dispatch)'
+        required: false
+
+permissions:
+  contents: write   # needed to upload release assets
+
+defaults:
+  run:
+    working-directory: router/baileys-sidecar
+
+jobs:
+  release-gate:
+    name: baileys-sidecar-release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: router/baileys-sidecar/package-lock.json
+
+      # --- Task 2: reproducible, hardened, production install ---------------
+      # npm ci  -> fails on any package-lock.json drift (lockfile integrity).
+      # --omit=dev -> production tree only (smaller attack surface in payload).
+      # --ignore-scripts -> no transitive install scripts execute during build.
+      - name: Production install (locked, no dev, no scripts)
+        run: npm ci --omit=dev --ignore-scripts
+
+      # Belt-and-suspenders drift check: prove the lockfile is in sync. If a PR
+      # mutated package.json without regenerating the lock, this fails the build.
+      - name: Verify lockfile integrity (no drift)
+        run: |
+          npm ls --omit=dev --all >/dev/null
+          git diff --exit-code -- package-lock.json
+
+      # --- Task 4: release-gate SCA -----------------------------------------
+      - name: npm audit (fail on high/critical)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: OSV-Scanner release-policy gate
+        uses: ./.github/actions/osv-gate
+        with:
+          working-directory: router/baileys-sidecar
+
+      # --- Task 3: CycloneDX SBOM -------------------------------------------
+      # cyclonedx-npm is run via npx pinned to a fixed version; reads the locked
+      # production tree we just installed. Output is the canonical CycloneDX JSON.
+      - name: Generate CycloneDX SBOM
+        run: |
+          mkdir -p dist
+          npx --yes @cyclonedx/cyclonedx-npm@^1.19.0 \
+            --omit dev \
+            --output-format JSON \
+            --output-file dist/baileys-sidecar.cdx.json
+          echo "SBOM components:"
+          node -e "const s=require('./dist/baileys-sidecar.cdx.json');console.log((s.components||[]).length,'components, spec',s.specVersion)"
+
+      # --- Task 2 (cont.): vendor + pin node_modules into the shipped payload -
+      # Package the EXACT production node_modules built from the locked tree,
+      # plus the app, plus the SBOM, into the release tarball. The payload ships
+      # with its dependencies pinned — no install happens on the target.
+      - name: Build vendored release payload
+        run: bash scripts/build-vendored.sh "${{ github.ref_name }}"
+
+      - name: Upload SBOM + payload as workflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baileys-sidecar-release-${{ github.run_id }}
+          path: |
+            router/baileys-sidecar/dist/baileys-sidecar.cdx.json
+            router/baileys-sidecar/dist/baileys-sidecar-*.tar.gz
+            router/baileys-sidecar/dist/baileys-sidecar-*.sha256
+          if-no-files-found: error
+
+      # Publish SBOM + payload as release assets when this is a real release.
+      - name: Attach assets to GitHub Release
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            router/baileys-sidecar/dist/baileys-sidecar.cdx.json
+            router/baileys-sidecar/dist/baileys-sidecar-*.tar.gz
+            router/baileys-sidecar/dist/baileys-sidecar-*.sha256

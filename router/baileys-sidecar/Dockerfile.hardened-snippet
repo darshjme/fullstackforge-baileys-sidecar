@@ -1,0 +1,32 @@
+# Hardened install stage for the Baileys sidecar Docker/desktop build (FUL-23 task 2).
+# Drop these lines into the existing sidecar Dockerfile, replacing any
+# `npm install` / `npm i` with the locked, no-dev, no-scripts form.
+#
+# Rationale: the Baileys tree runs in the same process as the master key + every
+# account's decrypted Signal keys. A single malicious transitive install script
+# could exfiltrate the store, so install scripts are disabled and only the
+# locked production tree is materialized.
+
+# ---- build stage -----------------------------------------------------------
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app/router/baileys-sidecar
+
+# Copy ONLY manifests first for layer caching + to make the lockfile authoritative.
+COPY router/baileys-sidecar/package.json router/baileys-sidecar/package-lock.json ./
+
+# BEFORE (do not use):  RUN npm install
+# AFTER (required):
+#   npm ci            -> fails on package-lock.json drift (lockfile integrity)
+#   --omit=dev        -> production tree only
+#   --ignore-scripts  -> no transitive install scripts execute at build time
+RUN npm ci --omit=dev --ignore-scripts
+
+# ---- runtime stage ---------------------------------------------------------
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /app/router/baileys-sidecar
+ENV NODE_ENV=production
+# Carry the vendored, pinned node_modules built above — no install on target.
+COPY --from=deps /app/router/baileys-sidecar/node_modules ./node_modules
+COPY router/baileys-sidecar/ ./
+USER node
+CMD ["node", "index.js"]

@@ -1,0 +1,74 @@
+name: baileys-sidecar-ci
+
+# PR gate for the Baileys sidecar (FUL-20 / FUL-23).
+# Scoped to router/baileys-sidecar/** so unrelated PRs don't pay the cost,
+# but the job name "baileys-sidecar-gate" is what branch protection requires
+# as a status check (see ops/branch-protection.json).
+#
+# Supply-chain controls enforced here on every PR:
+#   1. Lockfile integrity   -> `npm ci` (fails on package-lock.json drift)
+#   2. Known-vuln gate (SCA) -> `npm audit --audit-level=high` (fail high/critical)
+#   3. OSV-Scanner gate      -> CVSS >= 7.0 with-fix fails; no-fix -> tracked waiver
+
+on:
+  pull_request:
+    paths:
+      - 'router/baileys-sidecar/**'
+      - '.github/workflows/baileys-sidecar-ci.yml'
+  # Allow manual re-runs without a code change (e.g. after a waiver edit).
+  workflow_dispatch:
+
+# A failing PR that is later fixed should cancel the stale in-flight run.
+concurrency:
+  group: baileys-sidecar-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: router/baileys-sidecar
+
+jobs:
+  # IMPORTANT: this job's name (rendered as "baileys-sidecar-ci / baileys-sidecar-gate")
+  # is the exact string registered as a required status check in branch protection.
+  # Do not rename without updating ops/branch-protection.json.
+  baileys-sidecar-gate:
+    name: baileys-sidecar-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: router/baileys-sidecar/package-lock.json
+
+      # `npm ci` is strict: it fails if package.json and package-lock.json are out
+      # of sync. This is the lockfile-drift gate. --ignore-scripts blocks install
+      # scripts from running arbitrary code in CI (defense-in-depth for supply chain).
+      - name: Install (locked, no install scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm test --if-present
+
+      # SCA gate #1 — npm advisory database. Fail on high/critical.
+      - name: npm audit (fail on high/critical)
+        run: npm audit --audit-level=high
+
+      # SCA gate #2 — OSV-Scanner against the committed lockfile.
+      # Reusable composite action runs the scanner and the CVSS>=7-with-fix gate,
+      # honoring the Security-signed waiver file.
+      - name: OSV-Scanner release-policy gate
+        uses: ./.github/actions/osv-gate
+        with:
+          working-directory: router/baileys-sidecar

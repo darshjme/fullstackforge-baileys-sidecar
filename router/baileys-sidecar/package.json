@@ -1,0 +1,11 @@
+{
+  "name": "baileys-sidecar",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Supply-chain release gate for the Baileys sidecar (FUL-20 / FUL-23). The actual sidecar application source lands under this directory; this manifest carries the zero-dependency supply-chain gate (osv-gate.mjs) and its self-test so the merge-blocking CI check (baileys-sidecar-ci / baileys-sidecar-gate) runs green from day one.",
+  "type": "module",
+  "scripts": {
+    "lint": "node --check scripts/osv-gate.mjs && node --check scripts/test/osv-gate.test.mjs",
+    "test": "node scripts/test/osv-gate.test.mjs"
+  }
+}

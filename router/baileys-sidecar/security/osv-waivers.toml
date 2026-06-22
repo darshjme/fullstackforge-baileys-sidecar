@@ -1,0 +1,52 @@
+# Baileys sidecar — OSV-Scanner waiver / exception file
+# -----------------------------------------------------------------------------
+# Tracked exception register for the supply-chain release gate (FUL-20 / FUL-23),
+# under the Security Lead sign-off recorded on FUL-24.
+#
+# A waiver allows a vulnerability with CVSS >= 7.0 AND **no fix available** to
+# pass the release gate for a time-boxed window. Rules enforced by
+# scripts/osv-gate.mjs:
+#   * Only NO-FIX vulnerabilities can be waived. If a fix exists, take the fix —
+#     a waiver will NOT suppress it.
+#   * KEV / EPSS are NOT waiver-eligible here. A vuln in the CISA KEV catalog or
+#     with EPSS >= 0.5 fails the gate regardless of CVSS and must be escalated to
+#     the Security Lead for an explicit decision — it cannot be cleared by a row
+#     in this file.
+#   * A waiver is valid only when ALL of these hold (else it is ignored and the
+#     gate fails until renewed or the vuln is fixed):
+#       - id          : OSV/GHSA/CVE id exactly as reported by the scanner
+#       - signed_by   : the approving Security Lead (recorded approver)
+#       - reason      : the justification for accepting the risk
+#       - expires     : UTC date in the future (TTL)
+#   * Max remaining TTL (FUL-24 condition C):
+#       - High     (CVSS 7.0–8.9): <= 30 days out
+#       - Critical (CVSS >= 9.0)  : <= 14 days out
+#     Renewable once by the Security Lead; renewal = a fresh PR raising `expires`.
+#   * runtime_capable = true  (a network/fs-capable dependency loaded at runtime)
+#     additionally REQUIRES `escalation_ack` recording the Security Lead's
+#     explicit escalation sign-off for that elevated blast radius.
+#
+# To add a waiver: open a PR adding a [[waiver]] block below. The waiver file is
+# CODEOWNERS-gated to the Security Lead (see .github/CODEOWNERS), so the PR
+# cannot merge without Security review — that review IS the sign-off.
+#
+# policy_version / signoff_authority here are document-level provenance.
+
+policy_version = "2.0"
+owner = "DevOps Engineer"
+signoff_authority = "Security Lead"
+signed_off_on = "FUL-24"
+
+# ----------------------------------------------------------------------------
+# No active waivers at build-out time. The block below is a commented template.
+# ----------------------------------------------------------------------------
+# [[waiver]]
+# id = "GHSA-xxxx-xxxx-xxxx"      # OSV / GHSA / CVE id exactly as the scanner reports it
+# package = "some-transitive-dep"
+# reason = "No upstream fix; exploit requires local network position we don't expose."
+# introduced_by = "router/baileys-sidecar dependency tree"
+# expires = "2026-07-15"          # UTC date: <= 30 days out (High) / <= 14 days (Critical)
+# signed_by = "Security Lead <security-lead@fullstackforge>"
+# runtime_capable = false         # set true for network/fs-capable runtime deps
+# escalation_ack = ""             # required (Security Lead) when runtime_capable = true
+# tracking_issue = "FUL-XX"

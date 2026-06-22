@@ -1,0 +1,68 @@
+name: 'OSV-Scanner policy gate'
+description: >
+  Runs Google OSV-Scanner against the committed lockfile and enforces the
+  FUL-20 / FUL-24 threshold policy: fail on any vulnerability with CVSS >= 7.0
+  that has a fix available; no-fix highs are allowed only with a valid,
+  non-expired, Security-signed waiver (<=30d High / <=14d Critical) in
+  security/osv-waivers.toml. Additionally fails — regardless of CVSS, not
+  waiver-eligible — on any vuln in the CISA KEV catalog or with EPSS >= 0.5.
+  KEV/EPSS are fetched over HTTPS at runtime; the gate is fail-closed if that
+  enrichment is unreachable (set OSV_GATE_SKIP_ENRICHMENT=1 only for offline
+  dev runs — it disables condition B).
+
+inputs:
+  working-directory:
+    description: 'Directory containing package-lock.json'
+    required: true
+  osv-scanner-version:
+    description: 'Pinned OSV-Scanner release tag'
+    required: false
+    default: 'v1.9.2'
+
+runs:
+  using: 'composite'
+  steps:
+    # Pin OSV-Scanner by version for reproducibility. `go install` pulls the
+    # pinned tag; the binary lands on PATH via $(go env GOPATH)/bin.
+    - name: Install OSV-Scanner (pinned)
+      shell: bash
+      run: |
+        set -euo pipefail
+        go install github.com/google/osv-scanner/cmd/osv-scanner@${{ inputs.osv-scanner-version }}
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    # OSV-Scanner exits non-zero when it finds ANY vulnerability. We do NOT want
+    # the raw exit code to gate the build (it ignores CVSS / fix-availability /
+    # waivers), so we capture JSON and let osv-gate.mjs apply the real policy.
+    # `|| true` keeps the step alive; the JSON is the source of truth.
+    - name: Run OSV-Scanner (JSON output)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        osv-scanner scan --lockfile=package-lock.json --format=json > osv-results.json || true
+        echo "OSV-Scanner raw results:"
+        cat osv-results.json | head -c 2000 || true
+
+    # Apply the documented threshold policy + waiver file + KEV/EPSS exploitation
+    # gate. Exits non-zero on a policy violation OR if KEV/EPSS enrichment is
+    # unreachable (fail-closed), which fails the job (and therefore the gate).
+    - name: Enforce CVSS / KEV / EPSS policy (+ waivers)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: node scripts/osv-gate.mjs osv-results.json security/osv-waivers.toml
+
+    # Self-test the gate logic so a broken policy script can't silently pass
+    # the supply-chain gate it is supposed to enforce.
+    - name: Self-test osv-gate policy logic
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: node scripts/test/osv-gate.test.mjs
+
+    - name: Upload OSV results artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: osv-results-${{ github.run_id }}-${{ github.job }}
+        path: ${{ inputs.working-directory }}/osv-results.json
+        if-no-files-found: ignore

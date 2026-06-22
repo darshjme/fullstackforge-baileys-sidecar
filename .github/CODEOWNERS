@@ -1,0 +1,22 @@
+# CODEOWNERS — review gates for the Baileys sidecar supply-chain policy
+# (FUL-23 / FUL-24). branch-protection.json sets require_code_owner_reviews:true,
+# so an edit to any path below cannot merge without a review from the listed
+# owner. That review is the Security sign-off the waiver policy requires.
+#
+# Placeholder @fullstackforge/* team handles were replaced with the real owner
+# (@darshjme) on landing — this is a single-owner repo, so there is no separate
+# GitHub team. When a dedicated Security team exists, swap @darshjme for the
+# Security team slug on the waiver-register line below.
+
+# Security owns the exception register — adding/renewing a waiver IS a
+# Security decision and must not merge without explicit review.
+/router/baileys-sidecar/security/osv-waivers.toml   @darshjme
+
+# The gate logic and thresholds themselves are co-owned: DevOps maintains the
+# pipeline, Security must approve any change to what the gate enforces.
+/router/baileys-sidecar/scripts/osv-gate.mjs        @darshjme
+/.github/actions/osv-gate/                          @darshjme
+/.github/workflows/baileys-sidecar-*.yml            @darshjme
+
+# Branch-protection config is DevOps-owned infra-as-code.
+/ops/                                               @darshjme

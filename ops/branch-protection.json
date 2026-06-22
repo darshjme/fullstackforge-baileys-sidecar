@@ -1,0 +1,19 @@
+{
+  "_comment": "Branch-protection payload for the FUL repo default branch (FUL-23 task 1). Apply with ops/apply-branch-protection.sh. Requires a token with repo-admin on the FUL repo. The required_status_checks.contexts strings must match the workflow job names exactly.",
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "baileys-sidecar-ci / baileys-sidecar-gate"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": true
+  },
+  "restrictions": null,
+  "required_linear_history": false,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}

@@ -1,0 +1,81 @@
+name: baileys-sidecar-scheduled-scan
+
+# Weekly supply-chain re-scan of the committed lockfile (FUL-20 / FUL-23, task 5).
+# New advisories land continuously; a dep that was clean at merge can become
+# vulnerable later. This catches it without waiting for the next PR.
+#
+# Runs Mon 06:00 UTC. Same SCA controls as the gate, against the committed
+# lockfile. On failure it opens/updates a tracking issue so it isn't silently
+# missed (a red scheduled run on a quiet repo is easy to overlook).
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write   # to file the alert issue on failure
+
+defaults:
+  run:
+    working-directory: router/baileys-sidecar
+
+jobs:
+  scheduled-scan:
+    name: baileys-sidecar-scheduled-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: router/baileys-sidecar/package-lock.json
+
+      # Scan the committed lockfile directly — no install needed, and we want to
+      # scan exactly what is committed, not a freshly-resolved tree.
+      - name: npm audit against committed lockfile (high/critical)
+        run: npm audit --audit-level=high --package-lock-only
+
+      - name: OSV-Scanner release-policy gate
+        uses: ./.github/actions/osv-gate
+        with:
+          working-directory: router/baileys-sidecar
+
+      # If either control failed, surface it as a tracked issue.
+      - name: Open/refresh alert issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Baileys sidecar weekly supply-chain scan failed';
+            const body = [
+              'The scheduled supply-chain scan (`baileys-sidecar-scheduled-scan`) failed.',
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              'A previously-clean dependency now trips `npm audit --audit-level=high`',
+              'or the OSV-Scanner CVSS>=7-with-fix policy. Triage: upgrade the dep, or',
+              'if no fix exists add a Security-signed waiver to',
+              '`router/baileys-sidecar/security/osv-waivers.toml`.',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'supply-chain,baileys-sidecar',
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.data[0].number,
+                body: `Re-failed on ${new Date().toISOString()}.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, body,
+                labels: ['supply-chain', 'baileys-sidecar', 'security'],
+              });
+            }
