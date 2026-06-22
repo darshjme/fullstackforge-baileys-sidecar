@@ -14,17 +14,34 @@
 #     in this file.
 #   * A waiver is valid only when ALL of these hold (else it is ignored and the
 #     gate fails until renewed or the vuln is fixed):
-#       - id          : OSV/GHSA/CVE id exactly as reported by the scanner
-#       - signed_by   : the approving Security Lead (recorded approver)
-#       - reason      : the justification for accepting the risk
-#       - expires     : UTC date in the future (TTL)
-#   * Max remaining TTL (FUL-24 condition C):
-#       - High     (CVSS 7.0–8.9): <= 30 days out
-#       - Critical (CVSS >= 9.0)  : <= 14 days out
+#       - id             : OSV/GHSA/CVE id exactly as reported by the scanner
+#       - signed_by      : the approving Security Lead (recorded approver)
+#       - reason         : the justification for accepting the risk
+#       - tracking_issue : the linked issue id driving remediation (e.g. FUL-42)
+#       - expires        : UTC date in the future (TTL)
+#   * Max remaining TTL:
+#       - Absolute outer bound (FUL-42)         : <= 90 days out — ANY waiver
+#       - High     (CVSS 7.0–8.9, FUL-24)       : <= 30 days out
+#       - Critical (CVSS >= 9.0,  FUL-24)       : <= 14 days out
 #     Renewable once by the Security Lead; renewal = a fresh PR raising `expires`.
 #   * runtime_capable = true  (a network/fs-capable dependency loaded at runtime)
 #     additionally REQUIRES `escalation_ack` recording the Security Lead's
 #     explicit escalation sign-off for that elevated blast radius.
+#
+# FUL-42 — compensating control for the count=0 review posture (FUL-41):
+#   Because a waiver PR can self-merge with zero approving reviews under the
+#   ratified count=0 posture, human review of waiver *legitimacy* cannot be
+#   independently enforced. Instead the gate enforces machine hygiene that it
+#   FAILS CLOSED on, for EVERY entry below, independent of whether the suppressed
+#   vuln is in the current scan:
+#     - required fields present (incl. tracking_issue), valid issue-id format,
+#     - expires valid, in the future (no stale / indefinite suppression), and
+#       within the 90-day window,
+#   and it prints the full waiver register every run (and into the PR summary) so
+#   an added/changed suppression is never buried. This does NOT remove the
+#   single-author risk (a determined author can author a well-formed waiver) —
+#   that is the accepted property of a single-identity repo per FUL-41. It removes
+#   *silent* and *stale* suppression and makes every waiver auditable + time-boxed.
 #
 # To add a waiver: open a PR adding a [[waiver]] block below. The waiver file is
 # CODEOWNERS-gated to the Security Lead (see .github/CODEOWNERS), so the PR
@@ -41,12 +58,12 @@ signed_off_on = "FUL-24"
 # No active waivers at build-out time. The block below is a commented template.
 # ----------------------------------------------------------------------------
 # [[waiver]]
-# id = "GHSA-xxxx-xxxx-xxxx"      # OSV / GHSA / CVE id exactly as the scanner reports it
+# id = "GHSA-xxxx-xxxx-xxxx"      # REQUIRED — OSV / GHSA / CVE id exactly as the scanner reports it
 # package = "some-transitive-dep"
-# reason = "No upstream fix; exploit requires local network position we don't expose."
+# reason = "No upstream fix; exploit requires local network position we don't expose."  # REQUIRED justification
+# tracking_issue = "FUL-XX"       # REQUIRED — linked remediation issue id (e.g. FUL-42)
 # introduced_by = "router/baileys-sidecar dependency tree"
-# expires = "2026-07-15"          # UTC date: <= 30 days out (High) / <= 14 days (Critical)
-# signed_by = "Security Lead <security-lead@fullstackforge>"
+# expires = "2026-07-15"          # REQUIRED — UTC date, future, <= 90d (and <= 30d High / <= 14d Critical)
+# signed_by = "Security Lead <security-lead@fullstackforge>"  # REQUIRED approver
 # runtime_capable = false         # set true for network/fs-capable runtime deps
 # escalation_ack = ""             # required (Security Lead) when runtime_capable = true
-# tracking_issue = "FUL-XX"
