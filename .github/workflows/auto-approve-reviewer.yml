@@ -1,0 +1,156 @@
+name: merge-reviewer
+
+# Dedicated second-party automated reviewer (FUL-37).
+#
+# WHY THIS EXISTS
+#   FUL-35 accepted the interim posture required_approving_review_count=0 only
+#   because the org has a single GitHub identity (darshjme) that authors every
+#   PR and cannot self-approve, so any non-zero blanket count made `main`
+#   permanently unmergeable (the FUL-34 deadlock). This workflow restores a
+#   genuine second approving principal — a dedicated GitHub App, distinct from
+#   the PR author — so `required_approving_review_count: 1` can be restored
+#   without re-creating that deadlock.
+#
+# WHY A GITHUB APP (and not the built-in GITHUB_TOKEN)
+#   Reviews submitted with the default GITHUB_TOKEN (github-actions[bot]) are
+#   explicitly NOT counted toward required_approving_review_count by GitHub.
+#   Reviews submitted with a GitHub *App installation token* ARE counted — the
+#   App (`<app-slug>[bot]`) is a distinct principal. Provisioning of that App
+#   and its two repo secrets is documented in ops/PROVISION-REVIEWER.md. Until
+#   those secrets exist this workflow is inert (the approve job is skipped).
+#
+# SEPARATION OF DUTIES (defense-in-depth)
+#   The bot only clears ROUTINE PRs. It deliberately does NOT approve PRs that
+#   touch CODEOWNERS-protected (security-sensitive) paths — those keep their
+#   human Security code-owner review. This is enforced on two layers:
+#     1. The policy step below refuses to approve such PRs (no misleading
+#        bot approval appears on a sensitive PR).
+#     2. STRUCTURALLY by GitHub: require_code_owner_reviews=true plus the fact
+#        that this App is NOT listed in .github/CODEOWNERS means a bot approval
+#        can never satisfy the code-owner requirement even if step 1 were
+#        bypassed. The human Security gate cannot be cleared by the bot.
+#
+# TRIGGER
+#   Runs after the supply-chain gate workflow (baileys-sidecar-ci) completes, so
+#   the approving review is strictly gated on a green `baileys-sidecar-gate`.
+#   workflow_run always executes the copy of this file on the default branch, so
+#   edits take effect only once merged to `main`.
+
+on:
+  workflow_run:
+    workflows: ["baileys-sidecar-ci"]
+    types: [completed]
+
+# GITHUB_TOKEN here is used only for READ lookups (PR metadata + changed files).
+# The approving review is cast with the App installation token minted below,
+# never with GITHUB_TOKEN.
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: merge-reviewer-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    # Only a green gate run that originated from a pull request is eligible.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Resolve PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_JSON: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          num="$(printf '%s' "$PR_JSON" | jq -r '.[0].number // empty')"
+          if [ -z "$num" ]; then
+            # workflow_run.pull_requests can be empty; fall back to head-SHA lookup.
+            num="$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[0].number // empty')"
+          fi
+          if [ -z "$num" ]; then
+            echo "No open PR associated with $HEAD_SHA; nothing to review."
+            echo "number=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Resolved PR #$num for $HEAD_SHA"
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+
+      - name: Policy gate (author allowlist + separation of duties)
+        id: policy
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          # Authors whose routine PRs the bot may approve. Keep this tight.
+          ALLOWED_AUTHORS: "darshjme"
+        run: |
+          set -euo pipefail
+          meta="$(gh api "repos/$REPO/pulls/$PR" --jq '{author:.user.login,draft:.draft,state:.state}')"
+          author="$(printf '%s' "$meta" | jq -r .author)"
+          draft="$(printf '%s' "$meta" | jq -r .draft)"
+          state="$(printf '%s' "$meta" | jq -r .state)"
+          echo "PR #$PR author=$author draft=$draft state=$state"
+
+          deny() { echo "approve=false" >> "$GITHUB_OUTPUT"; echo "DECISION: skip — $1"; exit 0; }
+
+          [ "$state" = "open" ] || deny "PR is not open"
+          [ "$draft" = "false" ] || deny "PR is a draft"
+          case " $ALLOWED_AUTHORS " in
+            *" $author "*) : ;;
+            *) deny "author '$author' not in ALLOWED_AUTHORS" ;;
+          esac
+
+          # Idempotency: do not stack approvals if this automation already
+          # approved (marker string in the review body).
+          already="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+            --jq '[.[] | select(.state=="APPROVED" and (.body // "" | contains("FUL-37 merge-reviewer")))] | length')"
+          [ "${already:-0}" = "0" ] || deny "already approved by merge-reviewer"
+
+          # Separation of duties: never auto-approve a PR that touches any
+          # CODEOWNERS-protected path. Mirror of .github/CODEOWNERS — keep in
+          # sync if CODEOWNERS changes (CODEOWNERS is the authoritative gate;
+          # require_code_owner_reviews enforces it independently regardless).
+          files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')"
+          sensitive='^(\.github/|ops/|router/baileys-sidecar/security/osv-waivers\.toml|router/baileys-sidecar/scripts/osv-gate\.mjs)'
+          if printf '%s\n' "$files" | grep -Eq "$sensitive"; then
+            deny "touches CODEOWNERS-protected path — routing to human Security review"
+          fi
+
+          echo "approve=true" >> "$GITHUB_OUTPUT"
+          echo "DECISION: approve — routine PR by $author on green gate"
+
+      - name: Mint installation token for the dedicated reviewer App
+        id: apptoken
+        if: steps.policy.outputs.approve == 'true'
+        # Pinned to the v3.2.0 commit per this repo's supply-chain policy
+        # (no floating tags for third-party actions).
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.REVIEWER_APP_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
+      - name: Submit approving review as the App
+        if: steps.policy.outputs.approve == 'true'
+        env:
+          GH_TOKEN: ${{ steps.apptoken.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          GATE_RUN: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          body="$(printf '%s\n%s\n%s' \
+            "✅ **FUL-37 merge-reviewer** — automated second-party approval." \
+            "Approved on a green \`baileys-sidecar-gate\` ([gate run]($GATE_RUN))." \
+            "Routine PR (no CODEOWNERS-protected paths). PRs touching security-sensitive paths are NOT auto-approved and still require a human Security code-owner review.")"
+          gh api --method POST "repos/$REPO/pulls/$PR/reviews" \
+            -f event=APPROVE \
+            -f body="$body"
+          echo "Submitted approving review on PR #$PR as the reviewer App."
