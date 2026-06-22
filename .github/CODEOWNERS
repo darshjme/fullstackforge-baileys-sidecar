@@ -1,19 +1,29 @@
-# CODEOWNERS — review gates for the Baileys sidecar supply-chain policy
-# (FUL-23 / FUL-24). branch-protection.json sets require_code_owner_reviews:true,
-# so an edit to any path below cannot merge without a review from the listed
-# owner. That review is the Security sign-off the waiver policy requires.
+# CODEOWNERS - review gates for the Baileys sidecar supply-chain policy
+# (FUL-23 / FUL-24).
 #
-# Placeholder @fullstackforge/* team handles were replaced with the real owner
-# (@darshjme) on landing — this is a single-owner repo, so there is no separate
-# GitHub team. When a dedicated Security team exists, swap @darshjme for the
-# Security team slug on the waiver-register line below.
+# ===========================================================================
+# ENFORCEMENT STATUS (FUL-41 decision, verified FUL-36): ADVISORY / INERT TODAY.
+# branch-protection.json sets require_code_owner_reviews:true, BUT
+# required_approving_review_count:0 -- GitHub enforces code-owner approval ONLY
+# when count>=1. At count=0 these owner lines are NOT enforced: an edit to an
+# owned path can merge with ZERO reviews. The SOLE enforced merge control today
+# is the required status check 'baileys-sidecar-gate' (must report on every
+# path -- see FUL-39). These lines are kept (a) as documentation of intended
+# ownership and (b) so flipping to count>=1 is a one-line change the day a
+# genuine independent (human) reviewer is onboarded -- at which point every
+# line below becomes a hard, merge-blocking Security sign-off.
+# ===========================================================================
+#
+# Single-owner repo: @darshjme is the real owner (placeholder @fullstackforge/*
+# handles were resolved on landing). Swap @darshjme for a Security team slug
+# once a dedicated team exists.
 
-# Security owns the exception register — adding/renewing a waiver IS a
-# Security decision and must not merge without explicit review.
+# Security owns the exception register - adding/renewing a waiver IS a
+# Security decision (enforced only at count>=1; see status banner above).
 /router/baileys-sidecar/security/osv-waivers.toml   @darshjme
 
-# The gate logic and thresholds themselves are co-owned: DevOps maintains the
-# pipeline, Security must approve any change to what the gate enforces.
+# Gate logic and thresholds are co-owned: DevOps maintains the pipeline,
+# Security must approve any change to what the gate enforces.
 /router/baileys-sidecar/scripts/osv-gate.mjs        @darshjme
 /.github/actions/osv-gate/                          @darshjme
 /.github/workflows/baileys-sidecar-*.yml            @darshjme
@@ -21,13 +31,11 @@
 # Branch-protection config is DevOps-owned infra-as-code.
 /ops/                                               @darshjme
 
-# CODEOWNERS owns itself (FUL-36). Without this line, a PR that edits ONLY this
-# file touches no other owned path and merges with ZERO code-owner reviews —
-# silently deleting the @darshjme owner lines and removing the Security review
-# gate for every later PR. Self-ownership makes the gate tamper-resistant: the
-# review gate cannot be removed without a Security review.
+# CODEOWNERS owns itself (FUL-36). Closes the structural hole where a PR editing
+# ONLY this file touched no other owned path. NOTE (FUL-41): like every line
+# here, this is INERT at count=0 and gives real tamper-resistance only at
+# count>=1 - at which point CODEOWNERS cannot be edited without a Security review.
 /.github/CODEOWNERS                                  @darshjme
 
-# Defense-in-depth: own the whole .github tree (CI workflows, actions, config)
-# so no automation/CI surface can change without Security review.
+# Defense-in-depth: own the whole .github tree (CI workflows, actions, config).
 /.github/                                            @darshjme
