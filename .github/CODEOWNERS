@@ -20,3 +20,14 @@
 
 # Branch-protection config is DevOps-owned infra-as-code.
 /ops/                                               @darshjme
+
+# CODEOWNERS owns itself (FUL-36). Without this line, a PR that edits ONLY this
+# file touches no other owned path and merges with ZERO code-owner reviews —
+# silently deleting the @darshjme owner lines and removing the Security review
+# gate for every later PR. Self-ownership makes the gate tamper-resistant: the
+# review gate cannot be removed without a Security review.
+/.github/CODEOWNERS                                  @darshjme
+
+# Defense-in-depth: own the whole .github tree (CI workflows, actions, config)
+# so no automation/CI surface can change without Security review.
+/.github/                                            @darshjme
