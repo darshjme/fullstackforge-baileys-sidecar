@@ -1,0 +1,17 @@
+{
+  "_comment": "GitHub App manifest for the dedicated merge reviewer (FUL-37). Used with the App-manifest creation flow (see ops/PROVISION-REVIEWER.md). Permissions are the MINIMUM required to submit pull-request reviews and evaluate policy. No webhook, no write beyond pull_requests, single-repo install.",
+  "name": "ffr-merge-reviewer",
+  "url": "https://github.com/darshjme/fullstackforge-baileys-sidecar",
+  "description": "Second-party automated PR reviewer for fullstackforge-baileys-sidecar. Approves routine PRs on a green baileys-sidecar-gate so required_approving_review_count=1 can be enforced without a self-approval deadlock (FUL-37).",
+  "public": false,
+  "hook_attributes": {
+    "active": false
+  },
+  "default_events": [],
+  "default_permissions": {
+    "pull_requests": "write",
+    "contents": "read",
+    "metadata": "read",
+    "checks": "read"
+  }
+}
